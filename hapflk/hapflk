@@ -162,6 +162,7 @@ class Results():
         fout.close()
 
 def populate_parser(parser):
+    parser.add_argument('--version', help='print the version and exits', default=False, action='store_true')
     parser.add_argument('-p','--prefix',dest='prefix',help='prefix for output files',default='hapflk')
     parser.add_argument('--ncpu',metavar='N',help='Use N processors when possible',default=1,type=int)
     parser.add_argument('--eigen',help='Perform eigen decomposition of tests',default=False,action='store_true')
@@ -173,7 +174,7 @@ def populate_parser(parser):
     flk_opts.add_argument('--outgroup',default=None,help='Use population POP as outgroup for tree rooting (if None, use midpoint rooting)',metavar="POP")
     flk_opts.add_argument('--keep-outgroup',dest='keepOG',default=False,help='Keep outgroup in population set',action="store_true")
     LD_opts=parser.add_argument_group('hapFLK and LD model','Switch on hapFLK calculations and set parameters of the LD model ')
-    LD_opts.add_argument('-K',help='Set the number of clusters to K. hapFLK calculations switched off if K<0',default=-1,type=int)
+    LD_opts.add_argument('-K',help='Set the number of clusters to K. hapFLK calculations switched off if K<0 or using Pool-Seq format as input',default=-1,type=int)
     LD_opts.add_argument('--nfit',help='Set the number of model fit to use',type=int,default=20)
     LD_opts.add_argument('--phased','--inbred',help='Haplotype data provided',dest='inbred',action="store_true",default=False)
     LD_opts.add_argument('--no-kfrq',dest='nokfrq',help='Do not write Cluster frequencies',action="store_true",default=False)
@@ -193,10 +194,13 @@ def main():
     ## read options and init
     myparser=argparse.ArgumentParser(parents=[IO.io_parser],formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     populate_parser(myparser)
+    myopts=myparser.parse_args()
+    if myopts.version:
+        print "1.3.0_pool"
+        sys.exit(0)
     if len(sys.argv)<2:
         myparser.print_help()
-        sys.exit(0)
-    myopts=myparser.parse_args()
+        sys.exit(1)
     counter=Stepper()
     results=Results()
 
@@ -258,134 +262,135 @@ def main():
     results.update({'eigvec':myFLK.Q,'eigval':myFLK.D})
     myFLK_res=np.apply_along_axis(myFLK.eval_flk,0,frq_test)
     results.update({'pzero':myFLK_res[0,],'FLK':myFLK_res[1,],'pval.FLK':myFLK_res[2,],'eigen.FLK':np.power(myFLK_res[3:,],2)})
-                   
-    if myopts.K==0 and myopts.future:
-        ### Estimate fastphase model for different K
-        counter.new("Evaluating different K")
-        fout=open(myopts.prefix+'_K_fits.txt','w')
-        print >>fout,"K EM type loglike "
-        fastphase_model=myfph.fastphase(results['dataset'].nsnp)
-        for name,i in results['dataset'].indivIdx.items():
-            if results['dataset'].indiv[name].pop==myopts.outgroup:
-                continue
-            fastphase_model.addGenotype(name,np.array(results['dataset'].Data[i,sorted_snps_idx],dtype=int))
-        for K in range(10,31,5):
-            fph_params=[]
-            for e in range(myopts.nfit):
-                print>>sys.stderr,"K %d E %d"%(K,e)
-                par=fastphase_model.fit(nClus=K,nthread=myopts.ncpu)
-                print >>fout,K,e,'single',par.loglike
-                fout.flush()
-                fph_params.append(par)
-            opt_thetas=fphoptim.fastphase_combined_optim(fastphase_model,fph_params,myopts.optW,verbose=myopts.debug)[1]
-            seed_pars=myfph.modParams(fastphase_model.nLoci,K)
-            seed_pars.theta=opt_thetas
-            opt_pars=fastphase_model.fit(nClus=K,params=seed_pars,nthread=myopts.ncpu,verbose=myopts.debug)
-            print >>fout,K,0,'optimized',opt_pars.loglike
-            fout.flush()
-
-    ### hapFLK calculations
-    if myopts.K>0:
-        ## Estimate fastPhase model
-        counter.new("Fitting LD model (this might take a while)")
-        fph_params=[]
-        fastphase_model=myfph.fastphase(results['dataset'].nsnp)
-        for name,i in results['dataset'].indivIdx.items():
-            if results['dataset'].indiv[name].pop==myopts.outgroup:
-                continue
-            if myopts.inbred:
-                haplo=np.array(tohap(np.array(results['dataset'].Data[i,sorted_snps_idx],dtype=int)),dtype=np.int)
-                fastphase_model.addHaplotype(name,haplo)
-            else:
-                fastphase_model.addGenotype(name,np.array(results['dataset'].Data[i,sorted_snps_idx],dtype=int))
-        for e in range(myopts.nfit):
-            sys.stderr.write('\tEM %d / %d \r'%(e+1,myopts.nfit))
-            sys.stderr.flush()
-            par=fastphase_model.fit(nClus=myopts.K,nthread=myopts.ncpu,verbose=myopts.debug)
-            fph_params.append(par)
-            if myopts.wparams:
-                fout=open(myopts.prefix+'fph_par_'+str(e),'w')
-                par.write(fout)
-                fout.close()
-        print
-        if myopts.future and myopts.optimize:
-            counter.new("Attempting optimization over EMs")
-            fout=open(myopts.prefix+'_optEM.txt','w')
+                  
+    if myopts.K > -1 and not myopts.sync is None: 
+        if myopts.K==0 and myopts.future:
+            ### Estimate fastphase model for different K
+            counter.new("Evaluating different K")
+            fout=open(myopts.prefix+'_K_fits.txt','w')
             print >>fout,"K EM type loglike "
-            for e,par in enumerate(fph_params):
-                print >>fout,myopts.K,e,'single',par.loglike
-            opt_thetas=fphoptim.fastphase_combined_optim(fastphase_model,fph_params,myopts.optW,verbose=myopts.debug)[1]
-            seed_pars=myfph.modParams(fastphase_model.nLoci,myopts.K)
-            seed_pars.theta=opt_thetas
-            opt_pars=fastphase_model.fit(nClus=myopts.K,params=seed_pars,nthread=myopts.ncpu,verbose=False)
-            print >>fout,myopts.K,0,'optimized',opt_pars.loglike
-            single_max_loglike = np.max([x.loglike for x in fph_params])
-            if (opt_pars.loglike < single_max_loglike):
-                print >>sys.stderr,'Optimization failed, reverting to classical behaviour.'
-            else:
-                myopts.nfit=1 ## consider a single fit from now on
-                fph_params=[opt_pars]
-            fout.close()
-        results.update({'fph.params':fph_params})
-        ## Compute Cluster population frequencies
-        counter.new("Computing Cluster Frequencies")
-        ## [E][K][npop x nsnp] dataset
-        pop_cluster_freq=np.zeros((myopts.nfit,myopts.K,np.sum(filter_outgroup),results['dataset'].nsnp),dtype=float)
-        ngeno=0
-        fastphase_model.flush()
-        for ipop,popname in enumerate([x for x in results['pops'] if x!=myopts.outgroup]):
-            sys.stdout.write("\t %16s\r"%popname)
-            sys.stdout.flush
-            pvec=results['dataset'].populations[popname]
-            n_pop_indiv=sum(pvec)
-            for name,iind in results['dataset'].indivIdx.items():
-                if pvec[iind]:
-                    if myopts.inbred:
-                        haplo=np.array(tohap(np.array(results['dataset'].Data[iind,sorted_snps_idx],dtype=int)),dtype=np.int)
-                        fastphase_model.addHaplotype(name,haplo)
-                    else:
-                        fastphase_model.addGenotype(name,np.array(results['dataset'].Data[iind,sorted_snps_idx],dtype=int))
-                    ngeno+=1
-                    if ngeno==myopts.ncpu:
-                        for ifit in range(myopts.nfit):
-                            imputations=fastphase_model.impute([results['fph.params'][ifit]],nthread=myopts.ncpu)
-                            for nom,dat in imputations.items():
-                                probZ=dat[1]
-                                if myopts.inbred:
-                                    pop_cluster_freq[ifit,:,ipop,:]+=np.transpose(probZ[0]/n_pop_indiv)
-                                else:
-                                    pop_cluster_freq[ifit,:,ipop,:]+=np.transpose((0.5/n_pop_indiv)*(np.sum(probZ[0],axis=1)+np.sum(probZ[0],axis=2)))
-                        ngeno=0
-                        fastphase_model.flush()
-            ## anyone left ?
-            if ngeno>0:
-                for ifit in range(myopts.nfit):
-                    imputations=fastphase_model.impute([results['fph.params'][ifit]],nthread=myopts.ncpu)
-                    for nom,dat in imputations.items():
-                        probZ=dat[1]
-                        if myopts.inbred:
-                            pop_cluster_freq[ifit,:,ipop,:]+=np.transpose(probZ[0]/n_pop_indiv)
-                        else:
-                            pop_cluster_freq[ifit,:,ipop,:]+=np.transpose((0.5/n_pop_indiv)*(np.sum(probZ[0],axis=1)+np.sum(probZ[0],axis=2)))
-                ngeno=0
-                fastphase_model.flush()
-        print
-        results.update({'cluster.freqs':pop_cluster_freq})
+            fastphase_model=myfph.fastphase(results['dataset'].nsnp)
+            for name,i in results['dataset'].indivIdx.items():
+                if results['dataset'].indiv[name].pop==myopts.outgroup:
+                    continue
+                fastphase_model.addGenotype(name,np.array(results['dataset'].Data[i,sorted_snps_idx],dtype=int))
+            for K in range(10,31,5):
+                fph_params=[]
+                for e in range(myopts.nfit):
+                    print>>sys.stderr,"K %d E %d"%(K,e)
+                    par=fastphase_model.fit(nClus=K,nthread=myopts.ncpu)
+                    print >>fout,K,e,'single',par.loglike
+                    fout.flush()
+                    fph_params.append(par)
+                opt_thetas=fphoptim.fastphase_combined_optim(fastphase_model,fph_params,myopts.optW,verbose=myopts.debug)[1]
+                seed_pars=myfph.modParams(fastphase_model.nLoci,K)
+                seed_pars.theta=opt_thetas
+                opt_pars=fastphase_model.fit(nClus=K,params=seed_pars,nthread=myopts.ncpu,verbose=myopts.debug)
+                print >>fout,K,0,'optimized',opt_pars.loglike
+                fout.flush()
 
-        ## Compute hapFLK
-        counter.new('Computing hapFLK')
-        myFLK=popgen.FLK_test(results["kinship"],diallelic=False)
-        hapflk=np.zeros(results['dataset'].nsnp,dtype=float)
-        hapflk_eigen=np.zeros((results['eigval'].shape[0],results['dataset'].nsnp),dtype=float)
-        for e in range(myopts.nfit):
-            for k in range(myopts.K):
-                myFLK_res=np.apply_along_axis(myFLK.eval_flk,0,results['cluster.freqs'][e,k,])
-                hapflk+=myFLK_res[1,]
-                hapflk_eigen+=np.power(myFLK_res[3:,],2)
-        hapflk/=myopts.nfit
-        hapflk_eigen/=myopts.nfit
-        results.update({'hapflk':hapflk,'eigen.hapflk':hapflk_eigen})
- 
+        ### hapFLK calculations
+        if myopts.K>0:
+            ## Estimate fastPhase model
+            counter.new("Fitting LD model (this might take a while)")
+            fph_params=[]
+            fastphase_model=myfph.fastphase(results['dataset'].nsnp)
+            for name,i in results['dataset'].indivIdx.items():
+                if results['dataset'].indiv[name].pop==myopts.outgroup:
+                    continue
+                if myopts.inbred:
+                    haplo=np.array(tohap(np.array(results['dataset'].Data[i,sorted_snps_idx],dtype=int)),dtype=np.int)
+                    fastphase_model.addHaplotype(name,haplo)
+                else:
+                    fastphase_model.addGenotype(name,np.array(results['dataset'].Data[i,sorted_snps_idx],dtype=int))
+            for e in range(myopts.nfit):
+                sys.stderr.write('\tEM %d / %d \r'%(e+1,myopts.nfit))
+                sys.stderr.flush()
+                par=fastphase_model.fit(nClus=myopts.K,nthread=myopts.ncpu,verbose=myopts.debug)
+                fph_params.append(par)
+                if myopts.wparams:
+                    fout=open(myopts.prefix+'fph_par_'+str(e),'w')
+                    par.write(fout)
+                    fout.close()
+            print
+            if myopts.future and myopts.optimize:
+                counter.new("Attempting optimization over EMs")
+                fout=open(myopts.prefix+'_optEM.txt','w')
+                print >>fout,"K EM type loglike "
+                for e,par in enumerate(fph_params):
+                    print >>fout,myopts.K,e,'single',par.loglike
+                opt_thetas=fphoptim.fastphase_combined_optim(fastphase_model,fph_params,myopts.optW,verbose=myopts.debug)[1]
+                seed_pars=myfph.modParams(fastphase_model.nLoci,myopts.K)
+                seed_pars.theta=opt_thetas
+                opt_pars=fastphase_model.fit(nClus=myopts.K,params=seed_pars,nthread=myopts.ncpu,verbose=False)
+                print >>fout,myopts.K,0,'optimized',opt_pars.loglike
+                single_max_loglike = np.max([x.loglike for x in fph_params])
+                if (opt_pars.loglike < single_max_loglike):
+                    print >>sys.stderr,'Optimization failed, reverting to classical behaviour.'
+                else:
+                    myopts.nfit=1 ## consider a single fit from now on
+                    fph_params=[opt_pars]
+                fout.close()
+            results.update({'fph.params':fph_params})
+            ## Compute Cluster population frequencies
+            counter.new("Computing Cluster Frequencies")
+            ## [E][K][npop x nsnp] dataset
+            pop_cluster_freq=np.zeros((myopts.nfit,myopts.K,np.sum(filter_outgroup),results['dataset'].nsnp),dtype=float)
+            ngeno=0
+            fastphase_model.flush()
+            for ipop,popname in enumerate([x for x in results['pops'] if x!=myopts.outgroup]):
+                sys.stdout.write("\t %16s\r"%popname)
+                sys.stdout.flush
+                pvec=results['dataset'].populations[popname]
+                n_pop_indiv=sum(pvec)
+                for name,iind in results['dataset'].indivIdx.items():
+                    if pvec[iind]:
+                        if myopts.inbred:
+                            haplo=np.array(tohap(np.array(results['dataset'].Data[iind,sorted_snps_idx],dtype=int)),dtype=np.int)
+                            fastphase_model.addHaplotype(name,haplo)
+                        else:
+                            fastphase_model.addGenotype(name,np.array(results['dataset'].Data[iind,sorted_snps_idx],dtype=int))
+                        ngeno+=1
+                        if ngeno==myopts.ncpu:
+                            for ifit in range(myopts.nfit):
+                                imputations=fastphase_model.impute([results['fph.params'][ifit]],nthread=myopts.ncpu)
+                                for nom,dat in imputations.items():
+                                    probZ=dat[1]
+                                    if myopts.inbred:
+                                        pop_cluster_freq[ifit,:,ipop,:]+=np.transpose(probZ[0]/n_pop_indiv)
+                                    else:
+                                        pop_cluster_freq[ifit,:,ipop,:]+=np.transpose((0.5/n_pop_indiv)*(np.sum(probZ[0],axis=1)+np.sum(probZ[0],axis=2)))
+                            ngeno=0
+                            fastphase_model.flush()
+                ## anyone left ?
+                if ngeno>0:
+                    for ifit in range(myopts.nfit):
+                        imputations=fastphase_model.impute([results['fph.params'][ifit]],nthread=myopts.ncpu)
+                        for nom,dat in imputations.items():
+                            probZ=dat[1]
+                            if myopts.inbred:
+                                pop_cluster_freq[ifit,:,ipop,:]+=np.transpose(probZ[0]/n_pop_indiv)
+                            else:
+                                pop_cluster_freq[ifit,:,ipop,:]+=np.transpose((0.5/n_pop_indiv)*(np.sum(probZ[0],axis=1)+np.sum(probZ[0],axis=2)))
+                    ngeno=0
+                    fastphase_model.flush()
+            print
+            results.update({'cluster.freqs':pop_cluster_freq})
+
+            ## Compute hapFLK
+            counter.new('Computing hapFLK')
+            myFLK=popgen.FLK_test(results["kinship"],diallelic=False)
+            hapflk=np.zeros(results['dataset'].nsnp,dtype=float)
+            hapflk_eigen=np.zeros((results['eigval'].shape[0],results['dataset'].nsnp),dtype=float)
+            for e in range(myopts.nfit):
+                for k in range(myopts.K):
+                    myFLK_res=np.apply_along_axis(myFLK.eval_flk,0,results['cluster.freqs'][e,k,])
+                    hapflk+=myFLK_res[1,]
+                    hapflk_eigen+=np.power(myFLK_res[3:,],2)
+            hapflk/=myopts.nfit
+            hapflk_eigen/=myopts.nfit
+            results.update({'hapflk':hapflk,'eigen.hapflk':hapflk_eigen})
+     
     ## Write out results and bye
     counter.new("Writing down results")
     ##results.show_contents()

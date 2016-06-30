@@ -9,7 +9,7 @@ ext_modules=[ Extension('fastphase.fastphaseCython',["fastphase/fastphaseCython.
               Extension('fastphase.fastphaseCythonMT',["fastphase/fastphaseCythonMT.c"],include_dirs=[numpy.get_include()])]
 setup(
     name='hapflk',
-    version='1.3.0',
+    version='1.3.0_pool',
     description='haplotype-based test for differentiation in multiple populations',
     long_description=read('README.txt'),
     license = "GPL v3",

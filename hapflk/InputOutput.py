@@ -4,6 +4,7 @@ import re
 import numpy as np
 from bisect import insort
 from hapflk import missing
+import sync
 try:
     import argparse
     #### create a common parser for IO operations
@@ -40,6 +41,8 @@ try:
     input_group=io_parser.add_argument_group('Input Files','Available formats')
     input_group.add_argument('--ped',metavar='FILE',help='PED file')
     input_group.add_argument('--map',metavar='FILE',help='MAP file')
+    input_group.add_argument('--sync',metavar='FILE',help='Synchronized population file')
+    input_group.add_argument('--pop_names',metavar='FILE',help='Population names in one column for the synchronized file.')
     input_group.add_argument('--file',metavar='PREFIX',help='PLINK file prefix (ped,map)',type=plink_file)
     input_group.add_argument('--bfile',metavar='PREFIX',help='PLINK bfile prefix (bim,fam,bed)',type=plink_bfile)
     param_group=io_parser.add_argument_group('Data format options','')
@@ -51,7 +54,9 @@ try:
     map_group.add_argument('--chr',help='Select chromosome C',metavar='C')
     map_group.add_argument('--from',dest='posleft',help='Select SNPs with position > x (in bp/cM) Warning : does not work with BED files',metavar='x',default=0,type=float)
     map_group.add_argument('--to',dest='posright',help='Select SNPs with position < x (in bp/cM) Warning : does not work with BED files', metavar='x',default=np.inf,type=float)
-    map_group.add_argument('--other_map',help='Use alternative map (genetic/RH)',action='store_true',default=False)
+    map_group.add_argument('--other_map',help='Use alternative map (genetic/RH). Warning: does not work with sync files',action='store_true',default=False)
+    pop_group=io_parser.add_argument_group('Population selection','Filter populations')
+    pop_group.add_argument('--pops',help='Select by index (1-based) populations in the sync file. Comma-separated list of populations',metavar='POPLIST')
 except:
     pass
 
@@ -168,7 +173,136 @@ def parseInput(options,params=defaultParams):
     ## 3. --bfile : binary plink files
     if options.bfile:
         return parsePlinkBfile(options.bfile,params=params,options=options)
-               
+    if options.sync:
+        ## check population parameters
+        npops = sync.popCount(options.sync)
+        if options.pops is None:
+            populations = xrange(1, npops+1)
+        else:
+            populations = sync.commaListToPopulationIndexes(options.pops, npops)
+        if options.pop_names:
+            popNames = []
+            with open(options.pop_names) as f:
+                line = f.readline().rstrip('\n')
+                while line != "":
+                    popNames.append(line)
+                    line = f.readline().rstrip('\n')
+            if len(popNames) != npops:
+                print "Population names file should have the same rows as population columns"
+                print "DEBUG: popNames ->", popNames, "| npops ->", npops
+                raise
+        else:
+            popNames = None
+        ## read the map
+        myMap, maxCov = parseSyncFileAsMap(options.sync, populations)
+        if options.chr:
+            mySnpIdx=_get_snpIdx(myMap,options.chr,options.posleft,options.posright,options.other_map)
+        else:
+            mySnpIdx=None
+        dataset = parseSyncData(options.sync, populations, maxCov, myMap.input_order, popNames = popNames, snpidx=mySnpIdx)
+        return {'dataset':dataset,'map':myMap}
+
+######################## SYNC FILES ##############################
+
+def parseSyncFileAsMap(fileName, populations):
+    '''
+    Read a Sync file as map
+    
+    Parameters
+    --------------
+    fileName : the sync file name
+    populations : the populations for use in the sync file
+
+    Returns
+    ----------
+    list with: 
+         myMap : an instance from the hapflk Map class
+         maxCov: list with the maximum coverage for each population
+
+    See also
+    ----------
+    parseSyncData : for see how the rest of the file is parsed
+    data.Map : for help on the returned object
+    '''
+    myMap = data.Map()
+    maxCov = [0]*len(populations)
+    reader = sync.SyncReader(fileName)
+    for record in reader:
+        name = record.chr + "_" + str(record.pos)
+        myMap.addMarker(M=name,C=record.chr,posG=record.pos,posP=record.pos)
+        popNum = 0
+        for pop in record.subpopulations(populations):
+            if pop.cov > maxCov[popNum]:
+                maxCov[popNum] = pop.cov
+            popNum += 1
+    reader.close()
+    return myMap, maxCov
+
+def parseSyncData(fileName, populations, maxCov, snpNames, popNames = None, snpidx=None):
+    '''
+    Read a Sync file as dataset
+    
+    Parameters
+    --------------
+    fileName : the sync file name
+    populations : the populations for use in the sync file
+    maxCov: list with the maximum coverage for each population
+
+    Returns
+    ----------
+    dataset : an instance of the data.Dataset class
+
+    See also
+    ----------
+    parseSyncFileAsMap : for see how the rest of the file is parsed
+    data.Dataset : for help on the returned object
+    '''
+    ## get population names if not provided
+    if popNames is None:
+        popNames = [ "pop"+str(i) for i in xrange(1,len(populations)+1)]
+    elif len(populations) != len(popNames):
+        popNames = [popNames[x - 1] for x in populations]
+    ## get the snp indexes if not provided
+    if snpidx is None:
+        snpidx=range(len(snpNames))
+    ## create empty dataset
+    dataset=data.Dataset(fileName,nsnp=len(snpidx),nindiv=sum(maxCov))
+    ## add SNP info
+    for name in [snpNames[i] for i in snpidx]:
+        dataset.addSnp(name)
+    ## add individual information
+    for i in xrange(len(popNames)):
+        for j in xrange(maxCov[i]):
+            dataset.addIndividual(__getIndividualName(popNames[i], j) ,pop=popNames[i])
+    ## adding genotypes
+    sync_bases = ['A', 'C', 'T', 'G']
+    s = 0
+    log = 0
+    reader = sync.SyncReader(fileName)
+    for record in reader:
+        if s in snpidx:
+            ## log every 10,000 SNPs
+            if log % 10000:             
+                sys.stdout.write('\tLast parsed position %16s\r'%snpNames[s])
+                sys.stdout.flush()
+            popNum = 0
+            for pop in record.subpopulations(populations):
+                index = 0
+                for base in sync_bases:
+                    for counts in xrange(pop.countForAllele(base)):
+                        dataset.SetGenotype(__getIndividualName(popNames[popNum], index), snpNames[s], base+base)
+                        # print "SNP:", snpNames[s], "- individual:", __getIndividualName(popNames[popNum], index), "- genotype:", dataset.Genotype(__getIndividualName(popNames[popNum], index), snpNames[s])
+                        index += 1
+                popNum += 1
+            log += 1
+        s += 1
+    sys.stdout.flush()
+    reader.close()
+    return dataset
+
+def __getIndividualName(popName, index):
+    return popName + "_" + str(index)
+
 ######################## PED / MAP FILES ##############################
 
 def parsePedFile_nohead(fileName,snpNames,params=defaultParams,snpidx=None,excludeInd=[],noPheno=False):
