@@ -224,7 +224,7 @@ def parseSyncFileAsMap(fileName, populations):
     parseSyncData : for see how the rest of the file is parsed
     data.Map : for help on the returned object
     '''
-    print "Loading", fileName, "file as map"
+    print "Loading", fileName, "map"
     myMap = data.Map()
     maxCov = [0]*len(populations)
     reader = sync.SyncReader(fileName)
@@ -258,7 +258,7 @@ def parseSyncData(fileName, populations, maxCov, snpNames, popNames = None, snpi
     parseSyncFileAsMap : for see how the rest of the file is parsed
     data.Dataset : for help on the returned object
     '''
-    print "Loading", fileName, "file allele counts"
+    print "Loading", fileName, "allele counts"
     ## get population names if not provided
     if popNames is None:
         popNames = [ "pop"+str(i) for i in xrange(1,len(populations)+1)]
@@ -283,9 +283,9 @@ def parseSyncData(fileName, populations, maxCov, snpNames, popNames = None, snpi
     reader = sync.SyncReader(fileName)
     for record in reader:
         if s in snpidx:
-            ## log every 10,000 SNPs
-            if log % 10000:             
-                sys.stdout.write('\tLast parsed position %16s\r'%snpNames[s])
+            ## log every 1,000,000 SNPs
+            if log % 1000000:             
+                sys.stdout.write('\tLoaded %16s variants\r'%log)
                 sys.stdout.flush()
             popNum = 0
             for pop in record.subpopulations(populations):
