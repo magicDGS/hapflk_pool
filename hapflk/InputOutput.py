@@ -284,7 +284,7 @@ def parseSyncData(fileName, populations, maxCov, snpNames, popNames = None, snpi
     for record in reader:
         if s in snpidx:
             ## log every 1,000,000 SNPs
-            if log % 1000000:             
+            if log % 1000000 == 0:             
                 sys.stdout.write('\tLoaded %16s variants\r'%log)
                 sys.stdout.flush()
             popNum = 0
