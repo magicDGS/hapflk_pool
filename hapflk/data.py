@@ -35,12 +35,13 @@ class Dataset():
         ## mypop_genotypes=self.Data[vpop,]
         self.populations={}
     def addSnp(self,Name):
-        ''' Add a snp to the dataset '''
+        ''' Add a snp to the dataset and return it'''
         if self.snp.has_key(Name):
             return
         self.snp[Name]=SNP(Name)
         self.snpIdx[Name]=self.isnp
         self.isnp+=1
+        return self.snp[Name]
     def rmSnp(self,Name):
         ''' 
         Remove a snp from the dataset 

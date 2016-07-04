@@ -217,8 +217,12 @@ def main():
     sorted_snps_idx=np.array([data.snpIdx[s] for s in sorted_snps])
 
     ## compute allele frequencies
-    counter.new('Computing Allele Frequencies')
-    res=data.compute_pop_frq()
+    if myopts.sync:
+        counter.new('Using sync allele frequencies')
+        res = {'pops':my_input['pops'], 'freqs':my_input['freqs']}
+    else:
+        counter.new('Computing Allele Frequencies')
+        res=data.compute_pop_frq()
     results.update(res)
 
     ## compute Reynolds distances

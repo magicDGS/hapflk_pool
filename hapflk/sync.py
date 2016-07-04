@@ -234,17 +234,20 @@ class PopLine:
 class SyncReader:
 	def __init__(self,fileName):
 		self.__filename=fileName
-		if(isinstance(fileName,str)):
-			if isGZIP(fileName):
-				self.__filehandle=gzip.open(fileName,"r")
-			else:
-				self.__filehandle=open(fileName,"r")
-		else:
-			self.__filehandle=fileName
+		self.__openFH()
 
 	def __iter__(self):
 		return self
 	
+	def __openFH(self):
+		if(isinstance(self.__filename,str)):
+			if isGZIP(self.__filename):
+				self.__filehandle=gzip.open(self.__filename,"r")
+			else:
+				self.__filehandle=open(self.__filename,"r")
+		else:
+			self.__filehandle=self.__filename
+
 	def next(self):
 		line=""
 		while(1):
@@ -270,6 +273,14 @@ class SyncReader:
 			population.append(po)
 		
 		return PopLine(chr,pos,refc,population)
+
+	def countSnps(self):
+		total = 0
+		for line in self.__filehandle:
+			total += 1
+		self.close()
+		self.__openFH()
+		return total
 
 	def close(self):
 		self.__filehandle.close()

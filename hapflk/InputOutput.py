@@ -5,6 +5,7 @@ import numpy as np
 from bisect import insort
 from hapflk import missing
 import sync
+
 try:
     import argparse
     #### create a common parser for IO operations
@@ -193,16 +194,61 @@ def parseInput(options,params=defaultParams):
                 raise
         else:
             popNames = None
-        ## read the map
-        myMap, maxCov = parseSyncFileAsMap(options.sync, populations)
+
         if options.chr:
-            mySnpIdx=_get_snpIdx(myMap,options.chr,options.posleft,options.posright,options.other_map)
-        else:
-            mySnpIdx=None
-        dataset = parseSyncData(options.sync, populations, maxCov, myMap.input_order, popNames = popNames, snpidx=mySnpIdx)
-        return {'dataset':dataset,'map':myMap}
+            print "Warning: chromosome option not available for sync files"
+        return parseSyncFile(options.sync, populations, popNames)
 
 ######################## SYNC FILES ##############################
+
+def parseSyncFile(fileName, populations, popNames = None):
+    print "Reading", fileName
+
+    ## open reader
+    reader = sync.SyncReader(fileName)
+    nsnp = reader.countSnps()
+    print "Found", nsnp, "in file"
+
+    ## get population names if not provided
+    if popNames is None:
+        popNames = [ "pop"+str(i) for i in xrange(1,len(populations)+1)]
+    elif len(populations) != len(popNames):
+        popNames = [popNames[x - 1] for x in populations]
+    ## map object
+    myMap = data.Map()
+    ## create empty dataset
+    dataset = data.Dataset(fileName,nsnp=nsnp,nindiv=len(popNames))
+    for pop in popNames:
+        dataset.addIndividual(pop ,pop=pop)
+    sync_bases = ['A', 'T', 'C', 'G']
+    frqs = []
+    # for each record
+    for record in reader:
+        totalCounts = np.zeros(shape=(len(populations),len(sync_bases)),dtype='int16')
+        i = 0
+        for pop in record.subpopulations(populations):
+            popCounts = []
+            for base in sync_bases:
+                popCounts.append(pop.countForAllele(base))
+            totalCounts[i,] = popCounts
+            i += 1
+        # two major alleles indexes
+        indexes = np.argpartition(sum(totalCounts), 1)[len(sync_bases)-2:]
+        ## get biallelic
+        biallelic = totalCounts[:,indexes]
+        ## get the alleles
+        alleles = [sync_bases[x] for x in indexes]
+        alleleFreqs = biallelic.astype(float) / np.sum(biallelic,1)[:,None]
+        frqs.append(alleleFreqs[:,0])
+        # get the name for the SNP
+        name = record.chr + "_" + str(record.pos)
+        ## add the marker to the map and to the dataset
+        myMap.addMarker(M=name,C=record.chr,posG=record.pos,posP=record.pos)
+        snp = dataset.addSnp(name)
+        snp.initAlleles(alleles[0], alleles[1])
+    ## return all including freqs
+    return {'dataset':dataset,'map':myMap,'freqs':np.transpose(np.vstack(frqs)), 'pops':popNames}
+
 
 def parseSyncFileAsMap(fileName, populations):
     '''
