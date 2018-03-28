@@ -1,3 +1,9 @@
+# !!!!!!!!!!!!!!!!!!!!!!!!
+# DEPRECATED & ARCHIVED
+**THIS REPOSITORY WILL BE REMOVED COMPLETELY SOON**
+**USE https://github.com/magicDGS/poolFLK INSTEAD**
+# !!!!!!!!!!!!!!!!!!!!!!!!
+
 hapflk_pool: FLK test for Pool-Seq data
 =======================================
 
